@@ -111,6 +111,13 @@ impl<C: Chip, SPI: SpiDevice> WiznetDevice<C, SPI> {
         this.bus_write(C::SOCKET_MODE, &[C::SOCKET_MODE_VALUE]).await?;
         this.command(Command::Open).await?;
 
+        // Force the PHY to 100M full-duplex. The W5500's auto-negotiation can
+        // settle on 100M/half against a full-duplex link partner; in half-duplex
+        // it defers/discards its own TX (carrier sense), which looks like a
+        // one-way link (RX works, TX lost). Forcing full-duplex avoids the
+        // mismatch. PHYCFGR: RST|OPMODE(manual)|DPX(full)|SPD(100M).
+        this.bus_write(C::COMMON_PHY_CFG, &[0xFE]).await?;
+
         Ok(this)
     }
 
