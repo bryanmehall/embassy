@@ -35,7 +35,10 @@ impl super::SealedChip for W5500 {
     const SOCKET_INTR: Self::Address = (RegisterBlock::Socket0, 0x02);
     const SOCKET_INTR_CLR: Self::Address = (RegisterBlock::Socket0, 0x02);
 
-    const SOCKET_MODE_VALUE: u8 = (1 << 2) | (1 << 7);
+    // Diagnostic: this W5500-EVB-Pico2 drops unicast-to-SHAR (multicast/
+    // broadcast arrive, DHCP OFFER/ACK unicast does not). Disable the MAC filter
+    // -> promiscuous, to confirm/test.
+    const SOCKET_MODE_VALUE: u8 = (1 << 2);
 
     const BUF_SIZE: u16 = 0x4000;
     const AUTO_WRAP: bool = true;

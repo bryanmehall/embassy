@@ -101,6 +101,15 @@ impl<C: Chip, SPI: SpiDevice> WiznetDevice<C, SPI> {
 
         // Set MAC address
         this.bus_write(C::COMMON_MAC, &mac_addr).await?;
+        // Diagnostic: read SHAR back -- the RX MAC filter compares unicast dst
+        // against it; if it doesn't match the advertised MAC, unicast-to-us drops.
+        let mut shar_readback = [0u8; 6];
+        this.bus_read(C::COMMON_MAC, &mut shar_readback).await?;
+        defmt::info!(
+            "W5500 SHAR={=[u8]} (want {=[u8]})",
+            shar_readback.as_slice(),
+            mac_addr.as_slice()
+        );
 
         // Set the raw socket RX/TX buffer sizes.
         let buf_kbs = (C::BUF_SIZE / 1024) as u8;
@@ -110,6 +119,23 @@ impl<C: Chip, SPI: SpiDevice> WiznetDevice<C, SPI> {
         // MACRAW mode with MAC filtering.
         this.bus_write(C::SOCKET_MODE, &[C::SOCKET_MODE_VALUE]).await?;
         this.command(Command::Open).await?;
+        // Diagnostic: read SOCKET_MODE back to confirm promiscuous (0x04) took.
+        let mut mode_readback = [0u8];
+        this.bus_read(C::SOCKET_MODE, &mut mode_readback).await?;
+        defmt::info!("W5500 SOCKET_MODE={=u8:#x} (want 0x04)", mode_readback[0]);
+        // Diagnostic: read PHY config to check negotiated duplex (duplex mismatch
+        // would make the W5500 defer/drop its TX while receiving fine).
+        let mut phy = [0u8];
+        this.bus_read(C::COMMON_PHY_CFG, &mut phy).await?;
+        defmt::info!("W5500 PHYCFGR={=u8:#x}", phy[0]);
+        // FIX: the W5500 auto-negotiated 100M/HALF (0xba: DPX=0) while the rpi5
+        // is 100M/FULL -- a duplex mismatch that makes it defer/drop its TX
+        // (carrier sense) while receiving fine. Force manual 100M/FULL:
+        // OPMODE=1(manual) | DPX=1(full) | SPD=1(100M) | RST=1(release).
+        this.bus_write(C::COMMON_PHY_CFG, &[0xFE]).await?;
+        let mut phy2 = [0u8];
+        this.bus_read(C::COMMON_PHY_CFG, &mut phy2).await?;
+        defmt::info!("W5500 PHYCFGR forced={=u8:#x}", phy2[0]);
 
         Ok(this)
     }
@@ -154,7 +180,9 @@ impl<C: Chip, SPI: SpiDevice> WiznetDevice<C, SPI> {
         self.bus_write(C::SOCKET_COMMAND, &data).await
     }
 
-    async fn get_rx_size(&mut self) -> Result<u16, SPI::Error> {
+    /// Read Sn_RX_RSR (received size) — pub for a periodic poll diagnostic
+    /// (does the W5500 latch unicast frames into the RX buffer?).
+    pub async fn get_rx_size(&mut self) -> Result<u16, SPI::Error> {
         loop {
             // Wait until two sequential reads are equal
             let mut res0 = [0u8; 2];
@@ -240,6 +268,7 @@ impl<C: Chip, SPI: SpiDevice> WiznetDevice<C, SPI> {
 
     /// Write an ethernet frame to the device. Returns number of bytes written
     pub async fn write_frame(&mut self, frame: &[u8]) -> Result<usize, SPI::Error> {
+        defmt::info!("wiznet: tx len={}", frame.len());
         while self.get_tx_free_size().await? < frame.len() as u16 {}
         let write_ptr = self.get_tx_write_ptr().await?;
 
@@ -259,6 +288,7 @@ impl<C: Chip, SPI: SpiDevice> WiznetDevice<C, SPI> {
         self.set_tx_write_ptr(write_ptr.wrapping_add(frame.len() as u16))
             .await?;
         self.command(Command::Send).await?;
+        defmt::info!("wiznet: tx SENT len={}", frame.len());
         Ok(frame.len())
     }
 

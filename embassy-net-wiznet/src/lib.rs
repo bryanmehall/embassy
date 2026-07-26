@@ -87,6 +87,13 @@ impl<'d, C: Chip, SPI: SpiDevice, INT: Wait, RST: OutputPin> Runner<'d, C, SPI, 
                     p.tx_done();
                 }
                 Either3::Third(()) => {
+                    // Diagnostic: poll Sn_RX_RSR on tick — does the W5500 latch
+                    // frames that the INT pin doesn't fire for (unicast)?
+                    if let Ok(sz) = self.mac.get_rx_size().await {
+                        if sz != 0 {
+                            defmt::info!("wiznet: rx_size={} pending", sz);
+                        }
+                    }
                     if self.mac.is_link_up().await {
                         state_chan.set_link_state(LinkState::Up);
                     } else {
