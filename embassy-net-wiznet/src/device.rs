@@ -111,17 +111,20 @@ impl<C: Chip, SPI: SpiDevice> WiznetDevice<C, SPI> {
         this.bus_write(C::SOCKET_MODE, &[C::SOCKET_MODE_VALUE]).await?;
         this.command(Command::Open).await?;
 
-        // Force the PHY to 100M full-duplex with auto-negotiation DISABLED. The
-        // W5500's auto-negotiation can settle on 100M/half against a full-duplex
+        // Restart auto-negotiation, advertising all capabilities (OPMDC=111).
+        // The W5500's auto-neg can settle on 100M/half against a full-duplex
         // link partner; in half-duplex it defers/discards its own TX (carrier
         // sense), which looks like a one-way link (RX works, TX lost).
         //
-        // PHYCFGR (common reg 0x2E) layout: bit7 RST | bit6 OPMODE | bits5-3
-        // OPMDC | bits2-0 read-only status (DPX/SPD/LNK). OPMDC=011 selects
-        // "100BT full-duplex, auto-neg disabled". So RST|OPMODE|OPMDC(011) =
-        // 0b1101_1000 = 0xD8. NOTE: 0xFE would set OPMDC=111 = "all capable,
-        // auto-neg ENABLED", which just re-runs the flaky negotiation.
-        this.bus_write(C::COMMON_PHY_CFG, &[0xD8]).await?;
+        // PHYCFGR (common reg 0x2E): bit7 RST | bit6 OPMODE | bits5-3 OPMDC |
+        // bits2-0 read-only status (DPX/SPD/LNK). 0xFE = RST|OPMODE|OPMDC(111)
+        // = restart auto-neg advertising all modes. We rely on the link partner
+        // advertising full-duplex so the negotiated result is full; the partner
+        // should be constrained to full-duplex (e.g. `ethtool -s <dev> autoneg
+        // on advertise 0x008`) to make this deterministic. Forcing manual
+        // full-duplex here (OPMDC=011) does NOT work against an auto-neg
+        // partner: with no negotiation it falls back to half-duplex.
+        this.bus_write(C::COMMON_PHY_CFG, &[0xFE]).await?;
 
         Ok(this)
     }
